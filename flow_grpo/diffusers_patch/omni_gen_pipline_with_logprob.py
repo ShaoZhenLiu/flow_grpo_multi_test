@@ -187,10 +187,10 @@ def pipeline_with_logprob(
             # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
             timestep = t.expand(latent_model_input.shape[0])
             
-            print(f"pipeline中 latents shape: {latents.shape}")
-            print(f"pipeline中 latent_model_input shape: {latent_model_input.shape}")
-            print(f"pipeline中 input_ids shape: {processed_data['input_ids'].shape}")
-            print(f"pipeline中 input_img_latents shape: {[img_latent.shape for img_latent in input_img_latents]}")
+            # print(f"pipeline中 latents shape: {latents.shape}")
+            # print(f"pipeline中 latent_model_input shape: {latent_model_input.shape}")
+            # print(f"pipeline中 input_ids shape: {processed_data['input_ids'].shape}")
+            # print(f"pipeline中 input_img_latents shape: {[img_latent.shape for img_latent in input_img_latents]}")
 
             noise_pred = self.transformer(
                 hidden_states=latent_model_input,

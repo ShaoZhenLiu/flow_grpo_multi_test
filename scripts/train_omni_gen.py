@@ -210,32 +210,32 @@ def compute_log_prob(transformer, pipeline, sample, j, config, rank, samples_pro
     num_cfg = 2
     
     
-    print(f"sample['latents'] shape: {sample['latents'].shape}")
-    print(f"j: {j}")
-    print(f"sample['latents'][:, j] shape: {sample['latents'][:, j].shape}")
+    # print(f"sample['latents'] shape: {sample['latents'].shape}")
+    # print(f"j: {j}")
+    # print(f"sample['latents'][:, j] shape: {sample['latents'][:, j].shape}")
     
     latent_model_input = torch.cat([sample["latents"][:, j]] * (num_cfg + 1))
-    print(f"latent_model_input shape: {latent_model_input.shape}")
+    # print(f"latent_model_input shape: {latent_model_input.shape}")
     latent_model_input = latent_model_input.to(transformer.dtype)
     
     timestep = sample["timesteps"][:, j].expand(latent_model_input.shape[0])
-    print(f"timestep shape: {timestep.shape}")
+    # print(f"timestep shape: {timestep.shape}")
     
     
     multimodal_data = samples_prosessed_tmp_data["multimodal_data"]
-    print(f"input_ids shape: {multimodal_data['input_ids'].shape}")
-    print(f"attention_mask shape: {multimodal_data['attention_mask'].shape}")
-    print(f"position_ids shape: {multimodal_data['position_ids'].shape}")
-    print(f"input_image_sizes: {multimodal_data['input_image_sizes']}")
+    # print(f"input_ids shape: {multimodal_data['input_ids'].shape}")
+    # print(f"attention_mask shape: {multimodal_data['attention_mask'].shape}")
+    # print(f"position_ids shape: {multimodal_data['position_ids'].shape}")
+    # print(f"input_image_sizes: {multimodal_data['input_image_sizes']}")
     
     # 检查图像潜变量
-    print(f"image_latents shape: {[img_latent.shape for img_latent in samples_prosessed_tmp_data['image_latents']]}")
+    # print(f"image_latents shape: {[img_latent.shape for img_latent in samples_prosessed_tmp_data['image_latents']]}")
     
     # 扩展多模态数据以匹配批次尺寸
-    batch_size = latent_model_input.shape[0]
-    orig_batch_size = multimodal_data["input_ids"].shape[0]
+    # batch_size = latent_model_input.shape[0]
+    # orig_batch_size = multimodal_data["input_ids"].shape[0]
     
-    print(f"batch_size: {batch_size}, orig_batch_size: {orig_batch_size}")
+    # print(f"batch_size: {batch_size}, orig_batch_size: {orig_batch_size}")
     
     noise_pred = transformer(
         hidden_states=latent_model_input,
@@ -740,15 +740,15 @@ def main(_):
                     )
 
             # 整理采样数据
-            print(f"[DEBUG] collected_data['all_latents'] shape: {[latent.shape for latent in collected_data['all_latents']]}")
-            print(f"[DEBUG] collected_data['all_log_probs'] shape: {[log_prob.shape for log_prob in collected_data['all_log_probs']]}")
+            # print(f"[DEBUG] collected_data['all_latents'] shape: {[latent.shape for latent in collected_data['all_latents']]}")
+            # print(f"[DEBUG] collected_data['all_log_probs'] shape: {[log_prob.shape for log_prob in collected_data['all_log_probs']]}")
             
             latents = torch.stack(collected_data["all_latents"], dim=1)  # 所有时间步的潜在表示
             log_probs = torch.stack(collected_data["all_log_probs"], dim=1)  # 所有时间步的log概率
             timesteps = torch.stack(collected_data["all_timesteps"]).unsqueeze(0)  # .repeat(config.sample.train_batch_size, 1)
             images = collected_data["images"]  # 生成的图像
             
-            print(f"[DEBUG] latents shape: {latents.shape}")  # TODO 这里面都是nan，需要查看下具体是什么问题
+            # print(f"[DEBUG] latents shape: {latents.shape}")  # TODO 这里面都是nan，需要查看下具体是什么问题
             
             # 异步计算奖励（使用线程池执行器）
             rewards = executor.submit(reward_fn, images, prompts, prompt_metadata, ref_images, eval_prompts, vlm_questions, only_strict=True)
@@ -1061,7 +1061,7 @@ def main(_):
 
         #################### 训练阶段 ####################
         # 内部epoch循环（多次使用同一样本数据进行训练）
-        print("[DEBUG] mini_batch", total_batch_size//config.sample.num_batches_per_epoch)
+        # print("[DEBUG] mini_batch", total_batch_size//config.sample.num_batches_per_epoch)
         for inner_epoch in range(config.train.num_inner_epochs):
             # 重新批次化训练数据
             """
