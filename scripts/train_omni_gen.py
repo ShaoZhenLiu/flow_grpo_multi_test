@@ -1,6 +1,7 @@
 from collections import defaultdict
 import contextlib
 import os
+import sys
 import datetime
 from concurrent import futures
 import time
@@ -89,7 +90,8 @@ class GenevalPromptImageDataset(Dataset):
         
         item["prompt_with_image_path"] = f"{self.prompts[idx]}_{'_'.join(image_path_ls)}"
         # image = Image.open(os.path.join(self.dataset, image_path)).convert('RGB')
-        item["image"] = [Image.open(image_path).convert('RGB') for image_path in image_path_ls]
+        # item["image"] = [Image.open(image_path).convert('RGB') for image_path in image_path_ls]
+        item["image"] = image_path_ls
         return item
 
     @staticmethod
@@ -279,6 +281,11 @@ def eval(pipeline, test_dataloader, config, rank, local_rank, world_size, device
     if config.train.ema:
         ema.copy_ema_to(transformer_trainable_parameters, store_temp=True)
     all_rewards = defaultdict(list)
+    
+    # 创建保存图片的目录
+    save_dir = "results/omni_gen"
+    os.makedirs(save_dir, exist_ok=True)
+    
     for test_batch in tqdm(
             test_dataloader,
             desc="Eval: ",
@@ -288,27 +295,29 @@ def eval(pipeline, test_dataloader, config, rank, local_rank, world_size, device
         prompts, eval_prompts, vlm_questions, prompt_metadata, ref_images, _ = test_batch
         # ref_images = [ref_image.resize((config.resolution, config.resolution)) for ref_image in ref_images]
         ref_images = [
-            [ref_img.resize((config.resolution, config.resolution)) for ref_img in ref_image]
+            [ref_img for ref_img in ref_image]
             for ref_image in ref_images
         ]
-        with autocast():
-            with torch.no_grad():
-                # 通过pipeline生成图像并计算log概率
-                collected_data = pipeline_with_logprob(
-                    pipeline,
-                    prompt=prompts,
-                    input_images=ref_images,
-                    height=config.resolution,
-                    width=config.resolution,
-                    num_inference_steps=config.sample.num_steps,
-                    # guidance_scale=config.sample.guidance_scale,  # 这里只设计了text的guidance_scale，没有设计image的
-                    output_type="pt",
-                    noise_level=0,
-                    # generator=generator,
-                    sde_window_size=0,
-                    # sde_window_range=config.sample.sde_window_range,
-                    # process_index=rank
-                )
+        # with autocast():
+        with torch.no_grad():
+            # 通过pipeline生成图像并计算log概率
+            collected_data = pipeline_with_logprob(
+                pipeline,
+                prompt=prompts,
+                input_images=ref_images,
+                height=config.resolution,
+                width=config.resolution,
+                guidance_scale=2.5,
+                img_guidance_scale=2.0,
+                num_inference_steps=config.sample.num_steps,
+                # guidance_scale=config.sample.guidance_scale,  # 这里只设计了text的guidance_scale，没有设计image的
+                output_type="pt",
+                noise_level=0,
+                # generator=generator,
+                sde_window_size=0,
+                # sde_window_range=config.sample.sde_window_range,
+                # process_index=rank
+            )
         images = collected_data["images"]
         rewards = executor.submit(reward_fn, images, prompts, prompt_metadata, ref_images, eval_prompts, vlm_questions, only_strict=False)
         # yield to to make sure reward computation starts
@@ -338,9 +347,23 @@ def eval(pipeline, test_dataloader, config, rank, local_rank, world_size, device
 
     all_rewards = {key: np.concatenate(value) for key, value in all_rewards.items()}
     if rank == 0:
+        
+        num_samples = min(15, len(last_batch_images_gather))
+        sample_indices = range(num_samples)
+        for idx, index in enumerate(sample_indices):
+            image = last_batch_images_gather[index]
+            pil = Image.fromarray(
+                (image.transpose(1, 2, 0) * 255).astype(np.uint8)
+            )
+            pil = pil.resize((config.resolution, config.resolution))
+            
+            # 保存到results/omni_gen目录
+            save_path = os.path.join(save_dir, f"step_{global_step}_sample_{idx}.jpg")
+            pil.save(save_path)
+        
         with tempfile.TemporaryDirectory() as tmpdir:
-            num_samples = min(15, len(last_batch_images_gather))
-            sample_indices = range(num_samples)
+            # num_samples = min(15, len(last_batch_images_gather))
+            # sample_indices = range(num_samples)
             for idx, index in enumerate(sample_indices):
                 image = last_batch_images_gather[index]
                 pil = Image.fromarray(
@@ -433,9 +456,25 @@ def main(_):
     elif config.mixed_precision == "bf16":
         inference_dtype = torch.bfloat16
 
+    from diffusers import AutoencoderKL
+    from diffusers.models.transformers.transformer_omnigen import OmniGenTransformer2DModel
+    # vae = AutoencoderKL.from_pretrained(
+    #     config.pretrained.model, 
+    #     subfolder="vae",
+    #     torch_dtype=torch.float32  # 强制使用FP32
+    # )
+    
+    omni_transformer = OmniGenTransformer2DModel.from_pretrained(
+        config.pretrained.model, 
+        subfolder="transformer",
+        torch_dtype=torch.float32  # 强制使用FP32
+    )
+
     # load scheduler, tokenizer and models.
     pipeline = OmniGenPipeline.from_pretrained(
-        config.pretrained.model, torch_dtype=inference_dtype
+        config.pretrained.model, 
+        transformer=omni_transformer,
+        torch_dtype=inference_dtype
     )
     
     # freeze parameters of models to save more memory
@@ -521,6 +560,7 @@ def main(_):
         num_replicate=1,
         num_shard=world_size,
         mixed_precision_dtype=inference_dtype,
+        # mixed_precision_dtype=torch.float32,
         use_activation_checkpointing=config.activation_checkpointing,
         use_device_mesh=False, 
     )
@@ -534,6 +574,7 @@ def main(_):
             config.pretrained.model,
             subfolder="transformer",
             torch_dtype=inference_dtype
+            # torch_dtype=torch.float32
         )
         transformer_ref.eval()
         transformer_ref.requires_grad_(False)
@@ -615,9 +656,9 @@ def main(_):
     # for some reason, autocast is necessary for non-lora training but for lora training it isn't necessary and it uses
     # more memory
     if config.mixed_precision == "fp16":
-        autocast = lambda: torch.cuda.amp.autocast(dtype=torch.float16)
+        autocast = lambda: torch.amp.autocast("cuda", dtype=torch.float16)
     elif config.mixed_precision == "bf16":
-        autocast = lambda: torch.cuda.amp.autocast(dtype=torch.bfloat16)
+        autocast = lambda: torch.amp.autocast("cuda", dtype=torch.bfloat16)
     else:
         autocast = contextlib.nullcontext
 
@@ -675,7 +716,7 @@ def main(_):
             save_fsdp_checkpoint(config.save_dir, transformer, global_step, rank)
         
         # 定期进行评估
-        if epoch % config.eval_freq == 0 and epoch > 0:
+        if epoch % config.eval_freq == 0:
             eval(pipeline, test_dataloader, config, rank, local_rank, world_size, device, global_step, eval_reward_fn, executor, autocast, ema, transformer_trainable_parameters)
 
         
@@ -700,7 +741,7 @@ def main(_):
             
             # 调整参考图像尺寸
             ref_images = [
-                [ref_img.resize((config.resolution, config.resolution)) for ref_img in ref_image]
+                [ref_img for ref_img in ref_image]
                 for ref_image in ref_images
             ]
             
@@ -720,24 +761,24 @@ def main(_):
                 generator = None
                 
             # 使用自动混合精度进行采样
-            with autocast():
-                with torch.no_grad():  # 采样阶段不需要梯度
-                    # 通过pipeline生成图像并计算log概率
-                    collected_data = pipeline_with_logprob(
-                        pipeline,
-                        prompt=prompts,
-                        input_images=ref_images,
-                        height=config.resolution,
-                        width=config.resolution,
-                        num_inference_steps=config.sample.num_steps,
-                        # guidance_scale=config.sample.guidance_scale,  # 这里只设计了text的guidance_scale，没有设计image的
-                        output_type="pt",
-                        noise_level=config.sample.noise_level,
-                        generator=generator,
-                        sde_window_size=config.sample.sde_window_size,
-                        sde_window_range=config.sample.sde_window_range,
-                        process_index=rank
-                    )
+            # with autocast():
+            with torch.no_grad():  # 采样阶段不需要梯度
+                # 通过pipeline生成图像并计算log概率
+                collected_data = pipeline_with_logprob(
+                    pipeline,
+                    prompt=prompts,
+                    input_images=ref_images,
+                    height=config.resolution,
+                    width=config.resolution,
+                    num_inference_steps=config.sample.num_steps,
+                    # guidance_scale=config.sample.guidance_scale,  # 这里只设计了text的guidance_scale，没有设计image的
+                    output_type="pt",
+                    noise_level=config.sample.noise_level,
+                    generator=generator,
+                    sde_window_size=config.sample.sde_window_size,
+                    sde_window_range=config.sample.sde_window_range,
+                    process_index=rank
+                )
 
             # 整理采样数据
             # print(f"[DEBUG] collected_data['all_latents'] shape: {[latent.shape for latent in collected_data['all_latents']]}")
@@ -1106,14 +1147,14 @@ def main(_):
                         should_sync = False
                     
                     # 计算当前时间步的log概率
-                    with autocast():
-                        prossesed_data = collected_data["multimodal_data"]
-                        prev_sample, log_prob, prev_sample_mean, std_dev_t = compute_log_prob(transformer, pipeline, sample, j, config, rank, samples_prosessed_tmp_data[i])
-                        
-                        # 如果使用KL散度正则化，计算参考模型的输出
-                        if config.train.beta > 0:
-                            with torch.no_grad():
-                                _, _, prev_sample_mean_ref, _ = compute_log_prob(transformer_ref, pipeline, sample, j, config, rank, samples_prosessed_tmp_data[i])
+                    # with autocast():
+                    # prossesed_data = collected_data["multimodal_data"]
+                    prev_sample, log_prob, prev_sample_mean, std_dev_t = compute_log_prob(transformer, pipeline, sample, j, config, rank, samples_prosessed_tmp_data[i])
+                    
+                    # 如果使用KL散度正则化，计算参考模型的输出
+                    if config.train.beta > 0:
+                        with torch.no_grad():
+                            _, _, prev_sample_mean_ref, _ = compute_log_prob(transformer_ref, pipeline, sample, j, config, rank, samples_prosessed_tmp_data[i])
                     
                     # GRPO（Guided Reward Policy Optimization）逻辑
                     advantages = torch.clamp(

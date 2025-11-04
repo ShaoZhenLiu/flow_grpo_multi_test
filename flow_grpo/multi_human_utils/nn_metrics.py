@@ -211,7 +211,7 @@ def hps_score_function(
                 # Process the prompt
                 text = tokenizer([prompt]).to(device=device, non_blocking=True)
                 # Calculate the HPS
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast("cuda"):
                     outputs = hps_model(image, text)
                     image_features, text_features = (
                         outputs["image_features"],

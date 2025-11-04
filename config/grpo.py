@@ -499,7 +499,7 @@ def multi_human_omni_gen_1gpu():
     config.resolution = 256
     config.sample.train_batch_size = 2  # 8
     config.sample.num_image_per_prompt = 2  # 8
-    config.sample.num_batches_per_epoch = int(8/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))
+    config.sample.num_batches_per_epoch = int(8/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))  # int(8/(1*2/2))
     assert config.sample.num_batches_per_epoch % 2 == 0, "Please set config.sample.num_batches_per_epoch to an even number! This ensures that config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch / 2, so that gradients are updated twice per epoch."
     config.sample.test_batch_size = 2  # 16 # 16 is a special design, the test set has a total of 1018, to make 8*16*n as close as possible to 1018, because when the number of samples cannot be divided evenly by the number of cards, multi-card will fill the last batch to ensure each card has the same number of samples, affecting gradient synchronization.
 
@@ -519,6 +519,7 @@ def multi_human_omni_gen_1gpu():
     config.reward_fn = {
         "multi_human": 1.0,
     }
+    # config.mixed_precision="no"
     
     config.prompt_fn = "multi_human"
 

@@ -101,6 +101,9 @@ def pipeline_with_logprob(
     # 3. process multi-modal instructions
     if max_input_image_size != self.multimodal_processor.max_image_size:
         self.multimodal_processor.reset_max_image_size(max_image_size=max_input_image_size)
+    
+    # print(f"[DEBUG] prompt: {prompt}")
+    # print(f"[DEBUG] input_images: {input_images}")
     processed_data = self.multimodal_processor(
         prompt,
         input_images,
@@ -120,9 +123,14 @@ def pipeline_with_logprob(
     processed_data["input_ids"] = processed_data["input_ids"].to(device)
     processed_data["attention_mask"] = processed_data["attention_mask"].to(device)
     processed_data["position_ids"] = processed_data["position_ids"].to(device)
+    # print(f"[DEBUG] processed_data['input_ids']: {processed_data['input_ids']}")
+    # print(f"[DEBUG] processed_data['attention_mask']: {processed_data['attention_mask']}")
+    # print(f"[DEBUG] processed_data['position_ids']: {processed_data['position_ids']}")
 
     # 4. Encode input images
+    # print(f"[DEBUG] processed_data['input_pixel_values']: {processed_data['input_pixel_values']}")
     input_img_latents = self.encode_input_images(processed_data["input_pixel_values"], device=device)
+    # print(f"[DEBUG] input_img_latents: {input_img_latents[0]}")
 
     # 5. Prepare timesteps
     sigmas = np.linspace(1, 0, num_inference_steps + 1)[:num_inference_steps]
@@ -146,6 +154,8 @@ def pipeline_with_logprob(
         generator,
         latents,
     )
+    
+    # print(f"[DEBUG] latents: {latents}")
     
     # 设置随机种子
     random.seed(process_index)
@@ -187,10 +197,10 @@ def pipeline_with_logprob(
             # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
             timestep = t.expand(latent_model_input.shape[0])
             
-            # print(f"pipeline中 latents shape: {latents.shape}")
-            # print(f"pipeline中 latent_model_input shape: {latent_model_input.shape}")
-            # print(f"pipeline中 input_ids shape: {processed_data['input_ids'].shape}")
-            # print(f"pipeline中 input_img_latents shape: {[img_latent.shape for img_latent in input_img_latents]}")
+            # print(f"pipeline中 latents: {latents}")
+            # print(f"pipeline中 latent_model_input: {latent_model_input}")
+            # print(f"pipeline中 input_ids: {processed_data['input_ids']}")
+            # print(f"pipeline中 input_img_latents: {input_img_latents}")
 
             noise_pred = self.transformer(
                 hidden_states=latent_model_input,
@@ -202,6 +212,8 @@ def pipeline_with_logprob(
                 position_ids=processed_data["position_ids"],
                 return_dict=False,
             )[0]
+            
+            print(f"[DEBUG] noise_pred: {noise_pred}")  # nan, 可能是 torch.float16 搞的鬼
 
             if num_cfg == 2:
                 cond, uncond, img_cond = torch.split(noise_pred, len(noise_pred) // 3, dim=0)
@@ -214,6 +226,7 @@ def pipeline_with_logprob(
             # 这一步是 ODE ，我需要将其转换为 SDE
             # latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
             
+            # TODO log_prob是nan，需要检查
             latents, log_prob, prev_latents_mean, std_dev_t = sde_step_with_logprob(
                 self.scheduler, 
                 noise_pred.float(), 
@@ -229,6 +242,10 @@ def pipeline_with_logprob(
                 all_timesteps.append(t)
 
             progress_bar.update()
+    
+    # print(f"[DEBUG] all_latents: {all_latents}")
+    # print(f"[DEBUG] all_log_probs: {all_log_probs}")
+    # print(f"[DEBUG] all_timesteps: {all_timesteps}")
 
     if not output_type == "latent":
         latents = latents.to(self.vae.dtype)
