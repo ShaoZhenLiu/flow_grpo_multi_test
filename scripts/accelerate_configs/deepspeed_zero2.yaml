@@ -4,12 +4,12 @@ downcast_bf16: 'yes'
 deepspeed_config:
   # deepspeed_config_file: scripts/accelerate_configs/zero_stage2_config.json
   deepspeed_multinode_launcher: standard
-  # offload_optimizer_device: none
-  # offload_param_device: none
-  offload_optimizer_device: cpu
-  offload_param_device: cpu
-  zero3_init_flag: true  # false
+  offload_optimizer_device: none
+  offload_param_device: none
+  # offload_optimizer_device: cpu
+  # offload_param_device: cpu
+  zero3_init_flag: false  # false
   zero_stage: 2
 machine_rank: 0
 num_machines: 1
-num_processes: 2  # 8
+num_processes: 8
