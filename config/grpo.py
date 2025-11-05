@@ -541,7 +541,7 @@ def counting_flux_kontext_1gpu():
     config.sample.guidance_scale = 2.5
 
     config.resolution = 512  # 1024
-    config.sample.train_batch_size = 4  # 3
+    config.sample.train_batch_size = 2  # 3
     config.sample.num_image_per_prompt = 4  # 21  # 这个应该是k，也就是一组G的大小
     config.sample.num_batches_per_epoch = int(8/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))  # int(48/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))
     assert config.sample.num_batches_per_epoch % 2 == 0, "Please set config.sample.num_batches_per_epoch to an even number! This ensures that config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch / 2, so that gradients are updated twice per epoch."
