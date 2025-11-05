@@ -146,11 +146,11 @@ def multi_human_score(device):
 
     scorer = MultiHumanScorer()
 
-    def _fn(images, ref_images, prompts, eval_prompts, vlm_questions):
+    def _fn(images, prompts, ref_images):
         """
         images: 模型生成的图像 (N, C, H, W) or (N, H, W, C)
-        ref_images: 应该是一个路径列表，每个路径对应一个参考人脸图像
         prompts: 模型生成的图像对应的提示 (N,)
+        ref_images: 应该是一个路径列表，每个路径对应一个参考人脸图像
         eval_prompts: 模型生成的图像对应的提示，用于评估，不包含添加的图像顺序 (N,)
         vlm_questions: VLM评估需要的对应VLMPrompt (N,)
         """
@@ -158,6 +158,13 @@ def multi_human_score(device):
         if isinstance(images, torch.Tensor):
             images = (images * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
             images = images.transpose(0, 2, 3, 1)  # NCHW -> NHWC
+            # 将numpy数组转换为PIL图像列表
+        
+        pil_images = []
+        for i in range(images.shape[0]):  # 遍历批次维度
+            img_array = images[i]  # 获取单张图片 (H, W, C)
+            pil_img = Image.fromarray(img_array)
+            pil_images.append(pil_img)
 
         # if not isinstance(ref_images, torch.Tensor):
         #     ref_images = [np.array(img) for img in ref_images]
@@ -165,7 +172,7 @@ def multi_human_score(device):
         #     ref_images = ref_images.transpose(0, 3, 1, 2)  # NHWC -> NCHW
         #     ref_images = torch.tensor(ref_images, dtype=torch.uint8)/255.0
         
-        scores = scorer(images, prompts=eval_prompts, reference_peoples=ref_images, vlm_questions=vlm_questions)
+        scores = scorer(pil_images, prompts=prompts, reference_peoples=ref_images)
         # change tensor to list
         return scores, {}
 
@@ -475,7 +482,8 @@ def multi_score(device, score_dict):
             elif score_name == "image_similarity":
                 scores, rewards = score_fns[score_name](images, ref_images)
             elif score_name == "multi_human":
-                scores, rewards = score_fns[score_name](images, [data["people"] for data in metadata], prompts, eval_prompts, vlm_questions)
+                # scores, rewards = score_fns[score_name](images, [data["people"] for data in metadata], prompts, eval_prompts, vlm_questions)
+                scores, rewards = score_fns[score_name](images, prompts, ref_images)
             else:
                 scores, rewards = score_fns[score_name](images, prompts, metadata)
             score_details[score_name] = scores

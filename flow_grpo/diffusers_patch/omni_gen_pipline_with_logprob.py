@@ -227,13 +227,17 @@ def pipeline_with_logprob(
             # latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
             
             # TODO log_prob是nan，需要检查
-            latents, log_prob, prev_latents_mean, std_dev_t = sde_step_with_logprob(
+            latents, log_prob, prev_latents_mean, std_dev_t = sde_step_with_logprob(  # TODO 这里面会有nan，请找出问题
                 self.scheduler, 
                 noise_pred.float(), 
                 t.unsqueeze(0).repeat(latents.shape[0]), 
                 latents.float(),
                 noise_level=cur_noise_level,
             )
+            # print(f"[DEBUG] latents: {latents}")  # nan
+            # print(f"[DEBUG] log_prob: {log_prob}")  # nan
+            # print(f"[DEBUG] prev_latents_mean: {prev_latents_mean}")  # nan
+            # print(f"[DEBUG] std_dev_t: {std_dev_t}")  # 0.0
                 
             # 在SDE窗口内记录潜变量和对数概率
             if i >= sde_window[0] and i < sde_window[1]:
