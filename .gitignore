@@ -307,3 +307,5 @@ tags
 wandb/
 logs/
 notebooks/
+results/
+assests/

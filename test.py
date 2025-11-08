@@ -1,3 +1,7 @@
+"""
+CUDA_VISIBLE_DEVICES=1 python test.py
+"""
+
 import torch
 from diffusers import FluxKontextPipeline
 from diffusers.utils import load_image
@@ -7,9 +11,9 @@ from PIL import Image
 pipe = FluxKontextPipeline.from_pretrained("/data4/shaozhen.liu/model/FLUX.1-Kontext-dev/", torch_dtype=torch.bfloat16)
 pipe.to("cuda:1")
 
-input_image = load_image("assests/ym.jpg")
-input_image_2 = load_image("assests/zjm.jpg")
-input_image_3 = load_image("assests/gyy.jpg")
+input_image = load_image("assests/ym.png")
+input_image_2 = load_image("assests/zjm.png")
+input_image_3 = load_image("assests/gyy.png")
 
 # 调整两张图片到相同尺寸
 input_image = input_image.resize((512, 512))

@@ -17,6 +17,7 @@ def sde_step_with_logprob(
     prev_sample: Optional[torch.FloatTensor] = None,
     generator: Optional[torch.Generator] = None,
     sde_type: Optional[str] = 'sde',
+    return_sqrt_dt: Optional[bool] = False,
 ):
     """
     Predict the sample from the previous timestep by reversing the SDE. This function propagates the flow
@@ -87,4 +88,6 @@ def sde_step_with_logprob(
     # mean along all but batch dimension
     log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
     
+    if return_sqrt_dt:
+        return prev_sample, log_prob, prev_sample_mean, std_dev_t, torch.sqrt(-1*dt)
     return prev_sample, log_prob, prev_sample_mean, std_dev_t

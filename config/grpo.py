@@ -547,6 +547,7 @@ def counting_flux_kontext_1gpu():
     assert config.sample.num_batches_per_epoch % 2 == 0, "Please set config.sample.num_batches_per_epoch to an even number! This ensures that config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch / 2, so that gradients are updated twice per epoch."
     config.sample.test_batch_size = 2  # 2 # This bs is a special design, the test set has a total of 2048, to make gpu_num*bs*n as close as possible to 2048, because when the number of samples cannot be divided evenly by the number of cards, multi-card will fill the last batch to ensure each card has the same number of samples, affecting gradient synchronization.
 
+    config.train.learning_rate = 1e-5
     config.train.batch_size = config.sample.train_batch_size
     config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch//2
     config.train.num_inner_epochs = 1
@@ -559,7 +560,7 @@ def counting_flux_kontext_1gpu():
     config.mixed_precision = "bf16"
     config.save_freq = 30 # epoch
     config.eval_freq = 30
-    config.save_dir = 'logs/counting_edit/flux_kontext'
+    config.save_dir = 'logs/multi_human/flux_kontext'
     config.reward_fn = {
         # "image_similarity": 0.5,
         # "geneval": 0.5,
@@ -568,6 +569,47 @@ def counting_flux_kontext_1gpu():
     config.per_prompt_stat_tracking = True
     return config
 
+def multi_omni_gen2_1gpu():
+    gpu_number=1
+    config = compressibility()
+    # config.dataset = os.path.join(os.getcwd(), "dataset/counting_edit")
+    config.dataset = "/data4/shaozhen.liu/code/MultiHuman-Testbench/data/output"
+
+    # sd3.5 medium
+    # config.pretrained.model = "black-forest-labs/FLUX.1-Kontext-dev"
+    config.pretrained.model = "/data4/shaozhen.liu/model/OmniGen2/"
+    config.sample.num_steps = 6
+    config.sample.eval_num_steps = 28
+    config.sample.guidance_scale = 4.0
+
+    config.resolution = 256  # 1024
+    config.sample.train_batch_size = 2  # 3
+    config.sample.num_image_per_prompt = 2  # 21  # 这个应该是k，也就是一组G的大小
+    config.sample.num_batches_per_epoch = int(8/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))  # int(48/(gpu_number*config.sample.train_batch_size/config.sample.num_image_per_prompt))
+    assert config.sample.num_batches_per_epoch % 2 == 0, "Please set config.sample.num_batches_per_epoch to an even number! This ensures that config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch / 2, so that gradients are updated twice per epoch."
+    config.sample.test_batch_size = 1  # 2 # This bs is a special design, the test set has a total of 2048, to make gpu_num*bs*n as close as possible to 2048, because when the number of samples cannot be divided evenly by the number of cards, multi-card will fill the last batch to ensure each card has the same number of samples, affecting gradient synchronization.
+
+    config.train.learning_rate = 1e-5
+    config.train.batch_size = config.sample.train_batch_size
+    config.train.gradient_accumulation_steps = config.sample.num_batches_per_epoch//2
+    config.train.num_inner_epochs = 1
+    config.train.timestep_fraction = 0.99
+    config.train.beta = 0.04  # 0  # 添加 kl 散度的权重
+    config.sample.global_std = True
+    config.sample.same_latent = False
+    config.train.ema = True
+    config.sample.noise_level = 0.9
+    config.mixed_precision = "bf16"
+    config.save_freq = 30 # epoch
+    config.eval_freq = 30
+    config.save_dir = 'logs/multi_human/omni_gen2'
+    config.reward_fn = {
+        # "image_similarity": 0.5,
+        # "geneval": 0.5,
+        "multi_human": 1.0,
+    }
+    config.per_prompt_stat_tracking = True
+    return config
 
 def pickscore_flux():
     gpu_number=32

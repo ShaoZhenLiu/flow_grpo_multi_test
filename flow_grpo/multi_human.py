@@ -112,6 +112,7 @@ class MultiHumanScorer:
             current_vlm_question = vlm_questions[i] if isinstance(vlm_questions, list) and i < len(vlm_questions) else vlm_questions
             
             # 计算HPS分数
+            # hps_score = 0
             hps_score = self._hps_score_function(
                 [pil_image], current_prompt, self.tokenizer, self.preprocess_val, self.device, self.hps_model
             )[0]
@@ -176,7 +177,10 @@ class MultiHumanScorer:
             
             # 将当前图像的结果添加到结果列表
             # 先测试一下 1：1：1
-            reward = result["hps"] + result["accuracy"] + result["id_match"]
+            # reward = result["hps"] + result["accuracy"] + result["id_match"]
+            # reward = result["accuracy"] + result["id_match"]
+            align = (result["hps"] + result["accuracy"]) / 2
+            reward = (result["id_match"] * align)
             all_results.append(reward)
 
         # 返回所有图像的结果

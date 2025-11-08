@@ -140,6 +140,7 @@ def ocr_score(device):
 
     return _fn
 
+DEBUG = False
 
 def multi_human_score(device):
     from flow_grpo.multi_human import MultiHumanScorer
@@ -164,6 +165,10 @@ def multi_human_score(device):
         for i in range(images.shape[0]):  # 遍历批次维度
             img_array = images[i]  # 获取单张图片 (H, W, C)
             pil_img = Image.fromarray(img_array)
+            # 保存图像到文件（可选）
+            if DEBUG:
+                pil_img.save(f"results/omni_gen2/image_{i}_{prompts[i].split()[0]}.png")
+            
             pil_images.append(pil_img)
 
         # if not isinstance(ref_images, torch.Tensor):
