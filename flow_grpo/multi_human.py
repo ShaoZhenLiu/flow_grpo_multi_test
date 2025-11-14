@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-
+from scipy.optimize import linear_sum_assignment
 
 from .multi_human_utils import (crop_face, face_detect, gather_and_print_scores,
                    hps_score_function, hungarian_algorithm, init_peripherals,
@@ -69,7 +69,7 @@ class MultiHumanScorer:
             self.num_lmm = 0
     
     @torch.no_grad()
-    def __call__(self, 
+    def __call__old(self, 
                 images: Union[List[Image.Image], List[str], List[np.ndarray]],  # 应该是numpy
                 prompts: List[str],
                 reference_peoples: Union[List[List[str]], List[List[Image.Image]]] = None,
@@ -180,7 +180,131 @@ class MultiHumanScorer:
             # reward = result["hps"] + result["accuracy"] + result["id_match"]
             # reward = result["accuracy"] + result["id_match"]
             align = (result["hps"] + result["accuracy"]) / 2
-            reward = (result["id_match"] * align)
+            reward = (result["id_match"] * (align ** 2)) ** 0.5
+            all_results.append(reward)
+
+        # 返回所有图像的结果
+        return all_results
+    
+    
+    @torch.no_grad()
+    def __call__(self, 
+                images: Union[List[Image.Image], List[str], List[np.ndarray]],  # 应该是numpy
+                prompts: List[str],
+                reference_peoples: Union[List[List[str]], List[List[Image.Image]]] = None,
+                vlm_questions: List[List[str]] = None) -> dict:
+        """
+        对单张图像进行评估打分
+        
+        Args:
+            image: 输入图像（PIL图像、文件路径或numpy数组）
+            prompt: 对应的文本提示
+            reference_people: 参考人物图像路径列表
+            vlm_questions: VLM问题列表
+            
+        Returns:
+            包含各项评分的字典
+        """
+        # 处理图像输入
+        pil_images = []
+        for img in images:
+            if isinstance(img, str):
+                if not os.path.exists(img):
+                    raise FileNotFoundError(f"Image file {img} does not exist.")
+                pil_images.append(Image.open(img))
+            elif isinstance(img, np.ndarray):
+                pil_images.append(Image.fromarray(img))
+            else:
+                pil_images.append(img)
+        
+        # 初始化结果列表
+        all_results = []
+
+        # 对每张图像进行循环处理
+        for i, pil_image in enumerate(pil_images):
+            # 检测人脸
+            faces, face_image = self._face_detect(self.face_detector, pil_image, self.device)
+            
+            # 获取当前图像对应的提示和VLM问题
+            current_prompt = prompts[i] if isinstance(prompts, list) and i < len(prompts) else prompts
+            # current_eval_prompt = eval_prompts[i] if isinstance(eval_prompts, list) and i < len(eval_prompts) else eval_prompts
+            current_vlm_question = vlm_questions[i] if isinstance(vlm_questions, list) and i < len(vlm_questions) else vlm_questions
+            
+            # 计算HPS分数
+            # hps_score = 0
+            hps_score = self._hps_score_function(
+                [pil_image], current_prompt, self.tokenizer, self.preprocess_val, self.device, self.hps_model
+            )[0]
+            
+            # MLLM评估
+            mllm_answers = None
+            if self.MLLM_AWAKE and self.enable_mllm and current_vlm_question:
+                mllm_answers = self._mllm_vqa(current_vlm_question, pil_image)
+            
+            # 初始化当前图像的结果
+            result = {
+                "hps": float(hps_score),  # 这个需要
+                "num_detected_faces": 0,
+                "accuracy": 0,  # 这个需要
+                "id_match": 0.0,  # 这个也需要
+                "all_ids": [],
+                "mllm_answers": mllm_answers
+            }
+            
+            # 人脸匹配（如果有参考人物）
+            if reference_peoples and len(reference_peoples) > 0:
+                # 获取当前图像对应的参考人物
+                current_reference_people = reference_peoples[i] if isinstance(reference_peoples, list) and i < len(reference_peoples) else reference_peoples
+                
+                num_people = len(current_reference_people)
+                
+                # 过滤没有检测到人脸的情况
+                no_gen = len(faces.keys()) == 0 or faces["rects"].nelement() == 0
+                if not no_gen:
+                    num_genned_faces = len(faces["rects"])
+                    result["num_detected_faces"] = num_genned_faces
+                    
+                    # 提取生成的人脸特征
+                    gen_embeds = []
+                    for g_face in range(num_genned_faces):
+                        gen_embeds.append(self.ant_model(self._crop_face(faces, face_image, g_face)))
+                    
+                    # 提取参考人脸特征
+                    person_embeds = []
+                    for person in current_reference_people:
+                        person_face, person_image = self._face_detect(self.face_detector, person, self.device)
+                        person_embeds.append(self.ant_model(self._crop_face(person_face, person_image, 0)))
+                    
+                    # 构建代价矩阵并进行匈牙利匹配
+                    if len(person_embeds) > 0 and len(gen_embeds) > 0:
+                        sim_matrix = self._build_cost_matrix(person_embeds, gen_embeds)  # 把这个转换为tensor
+                        sim_matrix = torch.from_numpy(sim_matrix).to(self.device)
+                        
+                        with torch.no_grad():
+                            row_ind, col_ind = linear_sum_assignment(-sim_matrix.to(torch.float32).cpu().numpy())  # 匈牙利匹配
+                        
+                        weight_matrix = torch.ones_like(sim_matrix).to(self.device) * -1.
+                        for r, c in zip(row_ind, col_ind):
+                            weight_matrix[r, c] = 1  # 将匹配上的设为1
+                        
+                        # id_weight_matrix = torch.matmul(id_weight_gt.unsqueeze(-1), id_weight_pred.unsqueeze(0))
+
+                        reward = (sim_matrix * weight_matrix).mean().item()  # 把这个转换为float
+                        result["id_match"] = reward
+                        result["accuracy"] = int(num_people == num_genned_faces)
+                        
+                    
+                    # 更新统计
+                    self._update_stats(num_people, hps_score, result["id_match"], result["accuracy"])
+            else:
+                print(f"[DEBUG] Warning: No reference people provided for image {i}, skip face matching.")
+            
+            # 将当前图像的结果添加到结果列表
+            # 先测试一下 1：1：1
+            # reward = result["hps"] + result["accuracy"] + result["id_match"]
+            reward = result["hps"] + result["id_match"]
+            # align = (result["hps"] + result["accuracy"]) / 2
+            # reward = (result["id_match"] * (align ** 2)) ** 0.5
             all_results.append(reward)
 
         # 返回所有图像的结果

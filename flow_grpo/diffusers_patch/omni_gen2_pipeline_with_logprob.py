@@ -21,6 +21,44 @@ from .omni_gen2_sde_with_logprob import sde_step_with_logprob
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
+# Type hinting would cause circular import, self should be `OmniGen2Pipeline`
+def cache_init(self, num_steps: int):
+    '''
+    Initialization for cache.
+    '''
+    cache_dic = {}
+    cache = {}
+    cache_index = {}
+    cache[-1]={}
+    cache_index[-1]={}
+    cache_index['layer_index']={}
+    cache[-1]['layers_stream']={}
+    cache_dic['cache_counter'] = 0
+
+    for j in range(len(self.transformer.layers)):
+        cache[-1]['layers_stream'][j] = {}
+        cache_index[-1][j] = {}
+
+    cache_dic['Delta-DiT'] = False
+    cache_dic['cache_type'] = 'random'
+    cache_dic['cache_index'] = cache_index
+    cache_dic['cache'] = cache
+    cache_dic['fresh_ratio_schedule'] = 'ToCa' 
+    cache_dic['fresh_ratio'] = 0.0
+    cache_dic['fresh_threshold'] = 3
+    cache_dic['soft_fresh_weight'] = 0.0
+    cache_dic['taylor_cache'] = True
+    cache_dic['max_order'] = 4
+    cache_dic['first_enhance'] = 5
+
+    current = {}
+    current['activated_steps'] = [0]
+    current['step'] = 0
+    current['num_steps'] = num_steps
+
+    return cache_dic, current
+
+
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
 def retrieve_timesteps(
     scheduler,
@@ -256,12 +294,12 @@ def pipeline_with_logprob(
     num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
     self._num_timesteps = len(timesteps)
 
-    # enable_taylorseer = getattr(self, "enable_taylorseer", False)
-    # if enable_taylorseer:
-    #     model_pred_cache_dic, model_pred_current = cache_init(self, num_inference_steps)
-    #     model_pred_ref_cache_dic, model_pred_ref_current = cache_init(self, num_inference_steps)
-    #     model_pred_uncond_cache_dic, model_pred_uncond_current = cache_init(self, num_inference_steps)
-    #     self.transformer.enable_taylorseer = True
+    enable_taylorseer = getattr(self, "enable_taylorseer", False)
+    if enable_taylorseer:
+        model_pred_cache_dic, model_pred_current = cache_init(self, num_inference_steps)
+        model_pred_ref_cache_dic, model_pred_ref_current = cache_init(self, num_inference_steps)
+        model_pred_uncond_cache_dic, model_pred_uncond_current = cache_init(self, num_inference_steps)
+        self.transformer.enable_taylorseer = True
     # elif self.transformer.enable_teacache:
     #     # Use different TeaCacheParams for different conditions
     #     teacache_params = TeaCacheParams()
@@ -273,9 +311,9 @@ def pipeline_with_logprob(
 
     with self.progress_bar(total=num_inference_steps) as progress_bar:
         for i, t in enumerate(timesteps):
-            # if enable_taylorseer:
-            #     self.transformer.cache_dic = model_pred_cache_dic
-            #     self.transformer.current = model_pred_current
+            if enable_taylorseer:
+                self.transformer.cache_dic = model_pred_cache_dic
+                self.transformer.current = model_pred_current
             # elif self.transformer.enable_teacache:
             #     teacache_params.is_first_or_last_step = i == 0 or i == len(timesteps) - 1
             #     self.transformer.teacache_params = teacache_params
@@ -288,13 +326,13 @@ def pipeline_with_logprob(
                 prompt_attention_mask=prompt_attention_mask,
                 ref_image_hidden_states=ref_latents,
             )
-            text_guidance_scale = self.text_guidance_scale  # if self.cfg_range[0] <= i / len(timesteps) <= self.cfg_range[1] else 1.0
-            image_guidance_scale = self.image_guidance_scale  # if self.cfg_range[0] <= i / len(timesteps) <= self.cfg_range[1] else 1.0
+            text_guidance_scale = self.text_guidance_scale if self.cfg_range[0] <= i / len(timesteps) <= self.cfg_range[1] else 1.0
+            image_guidance_scale = self.image_guidance_scale if self.cfg_range[0] <= i / len(timesteps) <= self.cfg_range[1] else 1.0
             
             if text_guidance_scale > 1.0 and image_guidance_scale > 1.0:
-                # if enable_taylorseer:
-                #     self.transformer.cache_dic = model_pred_ref_cache_dic
-                #     self.transformer.current = model_pred_ref_current
+                if enable_taylorseer:
+                    self.transformer.cache_dic = model_pred_ref_cache_dic
+                    self.transformer.current = model_pred_ref_current
                 # elif self.transformer.enable_teacache:
                 #     teacache_params_ref.is_first_or_last_step = i == 0 or i == len(timesteps) - 1
                 #     self.transformer.teacache_params = teacache_params_ref
@@ -308,9 +346,9 @@ def pipeline_with_logprob(
                     ref_image_hidden_states=ref_latents,
                 )
 
-                # if enable_taylorseer:
-                #     self.transformer.cache_dic = model_pred_uncond_cache_dic
-                #     self.transformer.current = model_pred_uncond_current
+                if enable_taylorseer:
+                    self.transformer.cache_dic = model_pred_uncond_cache_dic
+                    self.transformer.current = model_pred_uncond_current
                 # elif self.transformer.enable_teacache:
                 #     teacache_params_uncond.is_first_or_last_step = i == 0 or i == len(timesteps) - 1
                 #     self.transformer.teacache_params = teacache_params_uncond
@@ -327,9 +365,9 @@ def pipeline_with_logprob(
                 model_pred = model_pred_uncond + image_guidance_scale * (model_pred_ref - model_pred_uncond) + \
                     text_guidance_scale * (model_pred - model_pred_ref)
             elif text_guidance_scale > 1.0:
-                # if enable_taylorseer:
-                #     self.transformer.cache_dic = model_pred_uncond_cache_dic
-                #     self.transformer.current = model_pred_uncond_current
+                if enable_taylorseer:
+                    self.transformer.cache_dic = model_pred_uncond_cache_dic
+                    self.transformer.current = model_pred_uncond_current
                 # elif self.transformer.enable_teacache:
                 #     teacache_params_uncond.is_first_or_last_step = i == 0 or i == len(timesteps) - 1
                 #     self.transformer.teacache_params = teacache_params_uncond
@@ -367,9 +405,9 @@ def pipeline_with_logprob(
             if step_func is not None:
                 step_func(i, self._num_timesteps)
 
-    # if enable_taylorseer:
-    #     del model_pred_cache_dic, model_pred_ref_cache_dic, model_pred_uncond_cache_dic
-    #     del model_pred_current, model_pred_ref_current, model_pred_uncond_current
+    if enable_taylorseer:
+        del model_pred_cache_dic, model_pred_ref_cache_dic, model_pred_uncond_cache_dic
+        del model_pred_current, model_pred_ref_current, model_pred_uncond_current
 
     latents = latents.to(dtype=dtype)
     if self.vae.config.scaling_factor is not None:

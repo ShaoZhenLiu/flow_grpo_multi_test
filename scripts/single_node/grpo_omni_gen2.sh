@@ -1,11 +1,11 @@
 # # 1 GPU
 set -x
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=1,2
 
 accelerate launch \
     --config_file scripts/accelerate_configs/deepspeed_zero2.yaml \
     --num_processes=1 \
-    --main_process_port 34501 \
+    --main_process_port 44501 \
     scripts/train_omni_gen2.py \
     --config config/grpo.py:multi_omni_gen2_1gpu
 

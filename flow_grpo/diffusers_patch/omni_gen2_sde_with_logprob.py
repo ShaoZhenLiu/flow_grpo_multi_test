@@ -87,6 +87,8 @@ def sde_step_with_logprob(
     t_next = t_next.to(dtype=torch.float32)
     dt = dt.to(dtype=torch.float32)
 
+    # 这里的 sigma_t 是sd3那边的 std_dev_t
+    # 这里的 1-t 是sd3那边的 sigma
     prev_sample_mean = (
         sample * (1 - sigma_t**2 / (2 * (1 - t)) * dt)
         + model_output * (1 + sigma_t**2 * t / (2 * (1 - t))) * dt
@@ -105,7 +107,7 @@ def sde_step_with_logprob(
     #     img_mask = expand_as(img_mask, sample).expand(sample.shape)
     #     prev_sample = prev_sample * img_mask
 
-    # if return_log_prob:
+    # if return_log_prob: TODO 这个跟之前的还不一样了，是不是需要重新计算一下？
     log_prob = (
         -((prev_sample.detach() - prev_sample_mean) ** 2)
         / (2 * ((sigma_t ** 2) * dt))

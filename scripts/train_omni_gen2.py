@@ -207,7 +207,8 @@ class GenevalPromptImageDataset(Dataset):
         with open(self.file_path, 'r', encoding='utf-8') as f:
             self.metadatas = [json.loads(line) for line in f]
             self.prompts = [item['omnigen_prompt'] for item in self.metadatas]
-            self.eval_prompts = [item['prompt'] for item in self.metadatas]
+            # self.eval_prompts = [item['prompt'] for item in self.metadatas]
+            self.eval_prompts = [item['omnigen_prompt'] for item in self.metadatas]
             self.vlm_questions = [item['vlm_questions'] for item in self.metadatas]
         
     def __len__(self):
@@ -415,8 +416,8 @@ def compute_log_prob(transformer, pipeline, sample, j, config):
         prompt_attention_mask=prompt_attention_mask,
         ref_image_hidden_states=ref_latents,
     )
-    text_guidance_scale = pipeline.text_guidance_scale  # if pipeline.cfg_range[0] <= i / len(timesteps) <= pipeline.cfg_range[1] else 1.0
-    image_guidance_scale = pipeline.image_guidance_scale  # if pipeline.cfg_range[0] <= i / len(timesteps) <= pipeline.cfg_range[1] else 1.0
+    text_guidance_scale = pipeline.text_guidance_scale if pipeline.cfg_range[0] <= j / len(sample["timesteps"][0]) <= pipeline.cfg_range[1] else 1.0
+    image_guidance_scale = pipeline.image_guidance_scale if pipeline.cfg_range[0] <= j / len(sample["timesteps"][0]) <= pipeline.cfg_range[1] else 1.0
     
     if text_guidance_scale > 1.0 and image_guidance_scale > 1.0:
         model_pred_ref = predict(
@@ -485,36 +486,29 @@ def eval(pipeline, test_dataloader, config, accelerator, global_step, reward_fn,
         #     tokenizers, 
         #     max_sequence_length=128, 
         #     device=accelerator.device
-        # )
+        # )        
+        # sample
+        if config.sample.same_latent:
+            generator = create_generator(prompts, base_seed=epoch*10000+i)
+        else:
+            generator = None
+
         with autocast():
             with torch.no_grad():
-                # images, _, _, _, _, _ = pipeline_with_logprob(
-                #     pipeline,
-                #     image=ref_images,
-                #     prompt_embeds=prompt_embeds,
-                #     pooled_prompt_embeds=pooled_prompt_embeds,
-                #     num_inference_steps=config.sample.eval_num_steps,
-                #     guidance_scale=config.sample.guidance_scale,
-                #     output_type="pt",
-                #     height=config.resolution,
-                #     width=config.resolution, 
-                #     # height=512,
-                #     # width=768,
-                #     max_area=config.resolution*config.resolution,
-                #     noise_level=0,
-                # )
                 images = pipeline_with_logprob(
                     pipeline,
                     prompt=prompts,
                     input_images=ref_images_ls,
-                    text_guidance_scale=config.sample.guidance_scale,  # TODO 这个估计得改一下
+                    text_guidance_scale=config.sample.guidance_scale // 2,  # TODO 这个估计得改一下
+                    image_guidance_scale=config.sample.guidance_scale,  # TODO 这个估计得改一下
                     height=config.resolution,
                     width=config.resolution, 
+                    cfg_range=(0.0, 0.6),
                     max_pixels=config.resolution*config.resolution,
-                    num_inference_steps=config.sample.num_steps,
+                    num_inference_steps=config.sample.eval_num_steps,
                     output_type="pt",
                     generator=generator,
-                    noise_level=0,
+                    noise_level=config.sample.noise_level,
                 )["image"]
         # rewards = executor.submit(reward_fn, images, prompts, prompt_metadata, ref_images, only_strict=False)
         rewards = executor.submit(reward_fn, images, prompts, prompt_metadata, ref_images_ls, only_strict=True)
@@ -628,8 +622,8 @@ def main(_):
         # we always accumulate gradients across timesteps; we want config.train.gradient_accumulation_steps to be the
         # number of *samples* we accumulate across, so we need to multiply by the number of training timesteps to get
         # the total number of optimizer steps to accumulate across.
-        # gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=config.train.gradient_accumulation_steps * num_train_timesteps,
+        # gradient_accumulation_steps=1,
     )
     if accelerator.is_main_process:
         wandb.init(
@@ -842,6 +836,7 @@ def main(_):
     epoch = 0
     global_step = 0
     train_iter = iter(train_dataloader)
+    pipeline.enable_taylorseer = True  # 可以在略微减少性能的情况下显著加速推理
 
     while True:
         #################### EVAL ####################
@@ -893,9 +888,11 @@ def main(_):
                         pipeline,
                         prompt=prompts,
                         input_images=ref_images_ls,
-                        text_guidance_scale=config.sample.guidance_scale,  # TODO 这个估计得改一下
+                        # text_guidance_scale=config.sample.guidance_scale,  # TODO 这个估计得改一下
+                        image_guidance_scale=config.sample.guidance_scale,  # TODO 这个估计得改一下
                         height=config.resolution,
                         width=config.resolution, 
+                        cfg_range=(0.0, 0.6),
                         max_pixels=config.resolution*config.resolution,
                         num_inference_steps=config.sample.num_steps,
                         output_type="pt",
@@ -1012,17 +1009,6 @@ def main(_):
             }
             # [DEBUG] reward: {'multi_human': tensor([0., 0., 0., 0., 0., 0., 0., 0.], device='cuda:0'), 'avg': tensor([0., 0., 0., 0., 0., 0., 0., 0.], device='cuda:0')}
             # print("[DEBUG] reward:", sample["rewards"])
-
-        # # collate samples into dict where each entry has shape (num_batches_per_epoch * sample.batch_size, ...)
-        # samples = {
-        #     k: torch.cat([s[k] for s in samples], dim=0)
-        #     if not isinstance(samples[0][k], dict)
-        #     else {
-        #         sub_key: torch.cat([s[k][sub_key] for s in samples], dim=0)
-        #         for sub_key in samples[0][k]
-        #     }
-        #     for k in samples[0].keys()
-        # }
         
         # 添加检查
         # print("开始检查samples对齐情况...")
@@ -1088,6 +1074,9 @@ def main(_):
         gathered_rewards = {key: value.float().cpu().numpy() for key, value in gathered_rewards.items()}
         # log rewards and images
         if accelerator.is_main_process:
+            print("[DEBUG] samples[\"rewards\"][\"avg\"] shape:", samples["rewards"]["avg"].shape)  # [8, 6]
+            print("[DEBUG] gathered_rewards['avg'] shape:", gathered_rewards['avg'].shape)  # [8, 6]
+            
             wandb.log(
                 {
                     "epoch": epoch,
@@ -1139,31 +1128,31 @@ def main(_):
         del samples["rewards"]
         del samples["prompt_ids"]
 
-        # Get the mask for samples where all advantages are zero across the time dimension
-        mask = (samples["advantages"].abs().sum(dim=1) != 0)
+        # # Get the mask for samples where all advantages are zero across the time dimension
+        # mask = (samples["advantages"].abs().sum(dim=1) != 0)
         
-        # If the number of True values in mask is not divisible by config.sample.num_batches_per_epoch,
-        # randomly change some False values to True to make it divisible
-        num_batches = config.sample.num_batches_per_epoch
-        true_count = mask.sum()
-        if true_count % num_batches != 0:
-            false_indices = torch.where(~mask)[0]
-            num_to_change = num_batches - (true_count % num_batches)
-            if len(false_indices) >= num_to_change:
-                random_indices = torch.randperm(len(false_indices))[:num_to_change]
-                mask[false_indices[random_indices]] = True  # 将一些 adventages 计算全部为 False 的值转换为 True
-        if accelerator.is_main_process:
-            wandb.log(
-                {
-                    "actual_batch_size": mask.sum().item()//config.sample.num_batches_per_epoch,
-                },
-                step=global_step,
-            )
+        # # If the number of True values in mask is not divisible by config.sample.num_batches_per_epoch,
+        # # randomly change some False values to True to make it divisible
+        # num_batches = config.sample.num_batches_per_epoch
+        # true_count = mask.sum()
+        # if true_count % num_batches != 0:
+        #     false_indices = torch.where(~mask)[0]
+        #     num_to_change = num_batches - (true_count % num_batches)
+        #     if len(false_indices) >= num_to_change:
+        #         random_indices = torch.randperm(len(false_indices))[:num_to_change]
+        #         mask[false_indices[random_indices]] = True  # 将一些 adventages 计算全部为 False 的值转换为 True
+        # if accelerator.is_main_process:
+        #     wandb.log(
+        #         {
+        #             "actual_batch_size": mask.sum().item()//config.sample.num_batches_per_epoch,
+        #         },
+        #         step=global_step,
+        #     )
 
-        # Filter out samples where the entire time dimension of advantages is zero
-        samples = {k: v[mask] for k, v in samples.items()}
+        # # Filter out samples where the entire time dimension of advantages is zero
+        # samples = {k: v[mask] for k, v in samples.items()}
 
-        print("[DEBUG] samples[\"timesteps\"].shape:", samples["timesteps"].shape)
+        # print("[DEBUG] samples[\"timesteps\"].shape:", samples["timesteps"].shape)
         total_batch_size, num_timesteps = samples["timesteps"].shape
 
         assert num_timesteps == config.sample.num_steps  # 6 == 6
@@ -1177,8 +1166,12 @@ def main(_):
             # rebatch for training
             print("total_batch_size", total_batch_size)
             print("num_batches_per_epoch", config.sample.num_batches_per_epoch)
+            # samples_batched = {
+            #     k: v.reshape(-1, total_batch_size//config.sample.num_batches_per_epoch, *v.shape[1:])  # 返回train_batch_size
+            #     for k, v in samples.items()
+            # }
             samples_batched = {
-                k: v.reshape(-1, total_batch_size//config.sample.num_batches_per_epoch, *v.shape[1:])
+                k: v.reshape(-1, 1, *v.shape[1:])
                 for k, v in samples.items()
             }
 
